@@ -306,13 +306,32 @@ def run_backtest(
     }
 
 
-def prepare_dataframe(csv_path: str = "XAUUSD_M5.csv") -> pd.DataFrame:
-    """Load data and add indicators + signals (shared pipeline)."""
+def prepare_dataframe(csv_path: str = "XAUUSD_M5.csv", config: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    """Load data and add indicators + signals (shared pipeline).
+
+    Args:
+        csv_path: Path to CSV data file.
+        config: Full strategy config dict. If None, uses defaults.
+    """
+    ind_cfg = (config or {}).get("indicators", {})
+    sig_cfg = (config or {}).get("signals", {})
+
     df = load_data(csv_path)
-    df = Indicators().add_indicators(df)
-    df = MarketStructure().detect_swings(df)
-    df = MarketStructure().detect_bos(df)
-    df = SignalEngine().generate_signal(df)
+    df = Indicators(
+        ema_window=ind_cfg.get("ema_window", 200),
+        atr_window=ind_cfg.get("atr_window", 14),
+        adx_window=ind_cfg.get("adx_window", 14),
+    ).add_indicators(df)
+    df = MarketStructure(
+        strength=sig_cfg.get("swing_strength", 2),
+    ).detect_swings(df)
+    df = MarketStructure(
+        strength=sig_cfg.get("swing_strength", 2),
+    ).detect_bos(df)
+    df = SignalEngine(
+        retest_tolerance=sig_cfg.get("retest_tolerance", 0.001),
+        adx_threshold=sig_cfg.get("adx_threshold", 20),
+    ).generate_signal(df)
     return df
 
 
@@ -340,7 +359,7 @@ if __name__ == "__main__":
     # --- Load and prepare data ---
     csv_path = config["data"]["csv_path"]
     logger.info("Loading data from %s", csv_path)
-    df = prepare_dataframe(csv_path)
+    df = prepare_dataframe(csv_path, config=config)
     logger.info("Total candles: %d", len(df))
 
     # --- Run backtest ---

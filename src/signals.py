@@ -3,8 +3,9 @@ import pandas as pd
 
 class SignalEngine:
 
-    def __init__(self, retest_tolerance=0.001):
+    def __init__(self, retest_tolerance=0.001, adx_threshold=20):
         self.retest_tolerance = retest_tolerance
+        self.adx_threshold = adx_threshold
 
     def generate_signal(self, df: pd.DataFrame):
 
@@ -30,7 +31,7 @@ class SignalEngine:
                     and current["close"] > bullish_bos_level
                     and current["close"] > current["open"]
                     and current["close"] > current["EMA200"]
-                    and current["ADX14"] >= 20
+                    and current["ADX14"] >= self.adx_threshold
                 )
 
                 if buy_condition:
@@ -45,7 +46,7 @@ class SignalEngine:
                     and current["close"] < bearish_bos_level
                     and current["close"] < current["open"]
                     and current["close"] < current["EMA200"]
-                    and current["ADX14"] >= 20
+                    and current["ADX14"] >= self.adx_threshold
                 )
 
                 if sell_condition:
