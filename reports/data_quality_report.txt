@@ -1,0 +1,31 @@
+Data Quality Report
+===================
+File: XAUUSD_M5.csv
+Rows: 1000
+Columns: time, open, high, low, close, tick_volume, spread, real_volume
+Summary:
+  INFO: 10
+  WARNING: 2
+  ERROR: 0
+
+Findings:
+- [INFO] DATASET_LOADED: Dataset loaded successfully.
+  Details: row_count=1000
+- [INFO] REQUIRED_COLUMNS_PRESENT: Required OHLC columns are present.
+  Details: columns=['time', 'open', 'high', 'low', 'close']
+- [INFO] TIME_VALUES_PRESENT: The time column has no missing values.
+- [INFO] OHLC_VALUES_PRESENT: No missing values found in open.
+  Details: column=open
+- [INFO] OHLC_VALUES_PRESENT: No missing values found in high.
+  Details: column=high
+- [INFO] OHLC_VALUES_PRESENT: No missing values found in low.
+  Details: column=low
+- [INFO] OHLC_VALUES_PRESENT: No missing values found in close.
+  Details: column=close
+- [INFO] NO_DUPLICATE_TIMESTAMPS: No duplicate timestamps were found.
+- [INFO] TIMESTAMPS_SORTED: Timestamps are sorted in ascending order.
+- [INFO] VALID_OHLC: OHLC relationships appear valid.
+- [WARNING] INCONSISTENT_TIMEFRAME: The time series contains intervals that differ from the expected 5-minute cadence.
+  Details: irregular_interval_count=3
+- [WARNING] MISSING_CANDLES: The dataset appears to contain missing expected candles.
+  Details: missing_candle_count=72

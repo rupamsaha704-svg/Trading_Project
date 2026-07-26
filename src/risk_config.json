@@ -1,0 +1,10 @@
+{
+  "risk_percent": 1.0,
+  "risk_reward": 2.0,
+  "atr_stop_loss_multiplier": 2.0,
+  "max_concurrent_positions": 1,
+  "daily_loss_limit_pct": 3.0,
+  "max_drawdown_pct": 5.0,
+  "account_balance": 10000.0,
+  "position_size_mode": "percent_of_equity"
+}
