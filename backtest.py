@@ -23,6 +23,7 @@ from src.indicators import Indicators
 from src.market_structure import MarketStructure
 from src.signals import SignalEngine
 from src.risk_manager import RiskManager
+from src.report_export import export_backtest_report
 
 
 # =============================================================================
@@ -361,3 +362,9 @@ if __name__ == "__main__":
 
     results = run_backtest(df)
     print_results(results)
+
+    # --- Export daily report (CSV + JSON) ---
+    report_files = export_backtest_report(results, output_dir=ROOT / "reports")
+    print(f"\nReports exported:")
+    print(f"  CSV:  {report_files['csv']}")
+    print(f"  JSON: {report_files['json']}")
