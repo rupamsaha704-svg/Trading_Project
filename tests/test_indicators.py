@@ -22,8 +22,12 @@ def test_atr_handles_nan_and_small_data():
     engine = Indicators().engine
     result = engine.atr(high, low, close, window=2)
 
-    assert result.iloc[0] == 1.0
+    # With window=2 and only 2 data points, ATR is defined at index window-1 (=1).
+    # Index 0 is correctly NaN because fewer than `window` TR values are available.
+    assert pd.isna(result.iloc[0])
     assert np.isfinite(result.iloc[1])
+    # TR[0]=1.0, TR[1]=1.5 → ATR[1] = mean(1.0, 1.5) = 1.25
+    assert result.iloc[1] == 1.25
 
 
 def test_adx_returns_finite_values_on_small_dataset():

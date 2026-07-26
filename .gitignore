@@ -1,0 +1,11 @@
+# Generated backtest reports (daily CSV/JSON)
+reports/backtest_*.csv
+reports/backtest_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
