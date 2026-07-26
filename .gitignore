@@ -2,6 +2,9 @@
 reports/backtest_*.csv
 reports/backtest_*.json
 
+# Log files
+logs/
+
 # Python
 __pycache__/
 *.py[cod]

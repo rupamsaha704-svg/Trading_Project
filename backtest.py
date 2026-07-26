@@ -24,23 +24,8 @@ from src.market_structure import MarketStructure
 from src.signals import SignalEngine
 from src.risk_manager import RiskManager
 from src.report_export import export_backtest_report
-
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-SETTINGS = {
-    "starting_balance": 10_000.0,
-    "risk_percent": 1.0,
-    "risk_reward": 2.0,
-    "atr_stop_loss_multiplier": 2.0,
-    "max_concurrent_positions": 1,
-    "daily_loss_limit_pct": 3.0,
-    "max_drawdown_pct": 5.0,
-    "spread_points": 0.30,       # spread in price points (e.g. 30 cents for gold)
-    "slippage_points": 0.10,     # slippage in price points
-}
+from src.config_loader import load_config, get_backtest_settings, validate_config
+from src.logger import setup_logger
 
 
 # =============================================================================
@@ -76,9 +61,18 @@ def run_backtest(
       (no overlapping trades, no re-scanning bars inside a trade's lifetime).
     - daily_loss resets when the candle date changes.
 
+    Args:
+        df: DataFrame with indicators and signals already applied.
+        settings: Flat settings dict (typically from get_backtest_settings()).
+                  If None, loads from strategy_config.json or uses defaults.
+
     Returns a dict with metrics and equity curve.
     """
-    cfg = {**SETTINGS, **(settings or {})}
+    # Build cfg: start from config-file defaults, then overlay any explicit settings
+    config = load_config(ROOT / "strategy_config.json")
+    cfg = get_backtest_settings(config)
+    if settings is not None:
+        cfg.update(settings)
 
     risk_manager = RiskManager(
         risk_percent=cfg["risk_percent"],
@@ -322,49 +316,69 @@ def prepare_dataframe(csv_path: str = "XAUUSD_M5.csv") -> pd.DataFrame:
     return df
 
 
-def print_results(results: Dict[str, Any]) -> None:
-    """Pretty-print backtest results to console."""
-    print("\n===================================")
-    print(" STRATEGY V3 BACKTEST RESULTS")
-    print("===================================")
-    print(f"Starting Balance:  {results['starting_balance']:.2f}")
-    print(f"Final Balance:     {results['final_balance']:.2f}")
-    print(f"Net Result:        {results['net_result']:.2f}")
-    print(f"Total Trades:      {results['total_trades']}")
-    print(f"Wins:              {results['wins']}")
-    print(f"Losses:            {results['losses']}")
-    print(f"Win Rate:          {results['win_rate']:.2f}%")
-    print(f"Profit Factor:     {results['profit_factor']:.2f}")
-    print(f"Expectancy:        {results['expectancy']:.2f}")
-    print(f"Gross Profit:      {results['gross_profit']:.2f}")
-    print(f"Gross Loss:        {results['gross_loss']:.2f}")
-    print(f"Max Drawdown:      {results['max_drawdown']:.2f}")
-    print(f"Max Drawdown %:    {results['max_drawdown_pct']:.2f}%")
-    print("===================================")
-    print()
-    print("Same-bar SL/TP Rule: CONSERVATIVE (assume loss)")
-    print(f"Spread:            {results['settings']['spread_points']} pts")
-    print(f"Slippage:          {results['settings']['slippage_points']} pts")
-    print("===================================")
-
-
 # =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 
 if __name__ == "__main__":
-    print("===================================")
-    print(" STRATEGY V3 BACKTEST")
-    print("===================================")
+    # --- Load configuration ---
+    config = load_config(ROOT / "strategy_config.json")
+    errors = validate_config(config)
+    if errors:
+        print("Configuration errors:")
+        for err in errors:
+            print(f"  - {err}")
+        sys.exit(1)
 
-    df = prepare_dataframe("XAUUSD_M5.csv")
-    print(f"Total Candles: {len(df)}")
+    # --- Setup structured logging ---
+    logger = setup_logger("backtest", config)
 
-    results = run_backtest(df)
-    print_results(results)
+    logger.info("=" * 50)
+    logger.info("STRATEGY V3 BACKTEST — Starting")
+    logger.info("=" * 50)
+
+    # --- Load and prepare data ---
+    csv_path = config["data"]["csv_path"]
+    logger.info("Loading data from %s", csv_path)
+    df = prepare_dataframe(csv_path)
+    logger.info("Total candles: %d", len(df))
+
+    # --- Run backtest ---
+    settings = get_backtest_settings(config)
+    logger.info(
+        "Settings: balance=%.2f, risk=%.1f%%, RR=%.1f, spread=%.2f, slippage=%.2f",
+        settings["starting_balance"],
+        settings["risk_percent"],
+        settings["risk_reward"],
+        settings["spread_points"],
+        settings["slippage_points"],
+    )
+
+    results = run_backtest(df, settings)
+
+    # --- Log results ---
+    logger.info("-" * 50)
+    logger.info("BACKTEST RESULTS")
+    logger.info("-" * 50)
+    logger.info("Starting Balance:  %.2f", results["starting_balance"])
+    logger.info("Final Balance:     %.2f", results["final_balance"])
+    logger.info("Net Result:        %.2f", results["net_result"])
+    logger.info("Total Trades:      %d", results["total_trades"])
+    logger.info("Wins:              %d", results["wins"])
+    logger.info("Losses:            %d", results["losses"])
+    logger.info("Win Rate:          %.2f%%", results["win_rate"])
+    logger.info("Profit Factor:     %.2f", results["profit_factor"])
+    logger.info("Expectancy:        %.2f", results["expectancy"])
+    logger.info("Max Drawdown:      %.2f (%.2f%%)", results["max_drawdown"], results["max_drawdown_pct"])
+    logger.info("Same-bar SL/TP Rule: CONSERVATIVE (assume loss)")
+    logger.info("-" * 50)
 
     # --- Export daily report (CSV + JSON) ---
     report_files = export_backtest_report(results, output_dir=ROOT / "reports")
-    print(f"\nReports exported:")
-    print(f"  CSV:  {report_files['csv']}")
-    print(f"  JSON: {report_files['json']}")
+    logger.info("Reports exported:")
+    logger.info("  CSV:  %s", report_files["csv"])
+    logger.info("  JSON: %s", report_files["json"])
+
+    logger.info("=" * 50)
+    logger.info("STRATEGY V3 BACKTEST — Complete")
+    logger.info("=" * 50)
