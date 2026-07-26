@@ -43,6 +43,23 @@ SETTINGS = {
 
 
 # =============================================================================
+# HELPERS
+# =============================================================================
+
+def _get_bar_date(row) -> Optional[Any]:
+    """Extract the date (no time) from a bar row. Returns None if no time column."""
+    if "time" in row.index:
+        ts = row["time"]
+        if isinstance(ts, pd.Timestamp):
+            return ts.date()
+        try:
+            return pd.Timestamp(ts).date()
+        except Exception:
+            return None
+    return None
+
+
+# =============================================================================
 # BACKTEST ENGINE
 # =============================================================================
 
@@ -51,6 +68,12 @@ def run_backtest(
     settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run backtest on a prepared DataFrame (indicators + signals already added).
+
+    Trade management rules:
+    - Only one position open at a time (max_concurrent_positions enforced).
+    - After a trade exits at bar j, the next signal scan resumes from bar j
+      (no overlapping trades, no re-scanning bars inside a trade's lifetime).
+    - daily_loss resets when the candle date changes.
 
     Returns a dict with metrics and equity curve.
     """
@@ -82,21 +105,35 @@ def run_backtest(
     gross_profit = 0.0
     gross_loss = 0.0
 
-    for i in range(1, len(df) - 1):
+    # Track the current trading day for daily_loss reset
+    current_day = None
+
+    # Use index-based iteration so we can skip ahead after a trade exits
+    i = 1
+    while i < len(df) - 1:
         current = df.iloc[i]
+
+        # --- Daily loss reset on date change ---
+        bar_day = _get_bar_date(current)
+        if bar_day is not None and bar_day != current_day:
+            current_day = bar_day
+            daily_loss = 0.0
+
         entry_price = float(current["close"])
         atr = float(current["ATR14"])
 
         if pd.isna(atr) or atr <= 0:
+            i += 1
             continue
 
         is_buy = bool(current["BuySignal"])
         is_sell = bool(current["SellSignal"])
 
         if not is_buy and not is_sell:
+            i += 1
             continue
 
-        # --- Risk validation gate ---
+        # --- Risk validation gate (including position count) ---
         validation = risk_manager.validate_trade(
             account_balance=balance,
             equity=balance,
@@ -105,16 +142,15 @@ def run_backtest(
             peak_equity=peak_equity,
         )
         if not validation["allowed"]:
+            i += 1
             continue
 
         # --- Determine side and apply spread + slippage ---
         if is_buy:
             side = "long"
-            # Buy execution: pay spread + slippage on entry
             adjusted_entry = entry_price + spread + slippage
         else:
             side = "short"
-            # Sell execution: receive less due to spread + slippage
             adjusted_entry = entry_price - spread - slippage
 
         # --- Calculate SL / TP using RiskManager ---
@@ -134,8 +170,11 @@ def run_backtest(
         stop_distance = abs(adjusted_entry - stop_loss)
         tp_distance = abs(take_profit - adjusted_entry)
 
+        # --- Mark position as open ---
+        current_positions += 1
+
         # --- Walk forward to resolve trade ---
-        trade_resolved = False
+        exit_bar = None
         for j in range(i + 1, len(df)):
             future = df.iloc[j]
             future_high = float(future["high"])
@@ -150,7 +189,6 @@ def run_backtest(
 
             # --- Same-bar SL/TP: conservative rule (always assume loss) ---
             if sl_hit and tp_hit:
-                # Both levels breached in same candle → assume SL hit first
                 pnl = -(stop_distance * position_size)
                 losses += 1
                 gross_loss += abs(pnl)
@@ -168,7 +206,7 @@ def run_backtest(
                     "exit_bar": j,
                     "note": "same-bar SL/TP → conservative loss",
                 })
-                trade_resolved = True
+                exit_bar = j
                 break
             elif sl_hit:
                 pnl = -(stop_distance * position_size)
@@ -188,7 +226,7 @@ def run_backtest(
                     "exit_bar": j,
                     "note": "",
                 })
-                trade_resolved = True
+                exit_bar = j
                 break
             elif tp_hit:
                 pnl = tp_distance * position_size
@@ -207,13 +245,24 @@ def run_backtest(
                     "exit_bar": j,
                     "note": "",
                 })
-                trade_resolved = True
+                exit_bar = j
                 break
+
+        # --- Close position ---
+        current_positions -= 1
 
         # Track equity
         equity_curve.append(balance)
         if balance > peak_equity:
             peak_equity = balance
+
+        # --- Continue scanning from the exit bar (prevents overlapping trades) ---
+        if exit_bar is not None:
+            i = exit_bar
+        else:
+            # Trade never resolved (ran out of data) — move past entry bar
+            i += 1
+        i += 1
 
     # ==========================================================================
     # PERFORMANCE METRICS

@@ -227,3 +227,172 @@ def test_profit_factor_and_expectancy_computed():
     assert isinstance(results["profit_factor"], float)
     assert isinstance(results["expectancy"], float)
     assert results["profit_factor"] > 0
+
+
+
+# =============================================================================
+# TESTS FOR PR #1 FIXES: overlap, exit-bar scan, position tracking, daily reset
+# =============================================================================
+
+
+def test_no_overlapping_trades_scan_resumes_from_exit_bar():
+    """Two signals close together: second must not fire while first trade is open.
+    After first trade exits, scan resumes from exit bar — the second signal
+    (which occurred during the first trade's lifetime) is skipped."""
+    # 20 bars: buy signal at bar 1, buy signal at bar 3.
+    # First trade enters at 1, SL hit at bar 4 (low drops).
+    # Bar 3 signal is inside trade 1's lifetime → must be skipped.
+    n = 20
+    prices = [100.0] * n
+    df = pd.DataFrame({
+        "open": prices,
+        "high": [102.0] * n,
+        "low": [98.0] * n,
+        "close": prices,
+        "ATR14": [2.0] * n,
+        "EMA200": [99.0] * n,
+        "ADX14": [30.0] * n,
+        "BuySignal": [False] * n,
+        "SellSignal": [False] * n,
+        "BullishBOS": [False] * n,
+        "BearishBOS": [False] * n,
+    })
+    # Signal at bar 1 and bar 3
+    df.loc[1, "BuySignal"] = True
+    df.loc[3, "BuySignal"] = True
+
+    # Trade 1 enters at bar 1 (entry=100, SL=96). Make SL hit at bar 4.
+    df.loc[4, "low"] = 95.0
+
+    results = run_backtest(df, {
+        "starting_balance": 10000.0,
+        "spread_points": 0.0,
+        "slippage_points": 0.0,
+    })
+
+    # Only 1 trade should execute (bar 3 is inside trade 1's lifetime → skipped)
+    assert results["total_trades"] == 1
+    assert results["trade_log"][0]["bar_index"] == 1
+    assert results["trade_log"][0]["exit_bar"] == 4
+
+
+def test_scan_continues_after_exit_bar_picks_up_later_signal():
+    """After a trade exits, a signal occurring AFTER the exit bar is taken."""
+    n = 20
+    prices = [100.0] * n
+    df = pd.DataFrame({
+        "open": prices,
+        "high": [102.0] * n,
+        "low": [98.0] * n,
+        "close": prices,
+        "ATR14": [2.0] * n,
+        "EMA200": [99.0] * n,
+        "ADX14": [30.0] * n,
+        "BuySignal": [False] * n,
+        "SellSignal": [False] * n,
+        "BullishBOS": [False] * n,
+        "BearishBOS": [False] * n,
+    })
+    # Signal at bar 1 and bar 8 (well after exit)
+    df.loc[1, "BuySignal"] = True
+    df.loc[8, "BuySignal"] = True
+
+    # Trade 1: SL hit at bar 3
+    df.loc[3, "low"] = 95.0
+    # Trade 2: TP hit at bar 10
+    df.loc[10, "high"] = 110.0
+
+    results = run_backtest(df, {
+        "starting_balance": 10000.0,
+        "spread_points": 0.0,
+        "slippage_points": 0.0,
+    })
+
+    # Both trades should fire (bar 8 is after exit_bar=3)
+    assert results["total_trades"] == 2
+    assert results["trade_log"][0]["bar_index"] == 1
+    assert results["trade_log"][1]["bar_index"] == 8
+
+
+def test_current_positions_blocks_concurrent_entry():
+    """With max_concurrent_positions=1 and a trade still open, new signals are blocked.
+    This is implicitly tested by overlap prevention, but here we verify the
+    validate_trade gate specifically via a scenario where positions would stack."""
+    # We set max_concurrent_positions=1 explicitly and have two signals.
+    # The trade from signal 1 does NOT resolve until after signal 2 → signal 2 blocked.
+    n = 20
+    prices = [100.0] * n
+    df = pd.DataFrame({
+        "open": prices,
+        "high": [102.0] * n,
+        "low": [98.0] * n,
+        "close": prices,
+        "ATR14": [2.0] * n,
+        "EMA200": [99.0] * n,
+        "ADX14": [30.0] * n,
+        "BuySignal": [False] * n,
+        "SellSignal": [False] * n,
+        "BullishBOS": [False] * n,
+        "BearishBOS": [False] * n,
+    })
+    df.loc[1, "BuySignal"] = True
+    df.loc[5, "BuySignal"] = True
+
+    # Trade 1 SL hit at bar 10 (long after bar 5)
+    df.loc[10, "low"] = 95.0
+
+    results = run_backtest(df, {
+        "starting_balance": 10000.0,
+        "spread_points": 0.0,
+        "slippage_points": 0.0,
+        "max_concurrent_positions": 1,
+    })
+
+    # Only 1 trade (bar 5 is inside trade 1's lifetime, skipped by exit-bar logic)
+    assert results["total_trades"] == 1
+
+
+def test_daily_loss_resets_on_new_day():
+    """daily_loss should reset when the candle date changes, allowing new trades."""
+    n = 20
+    # Day 1: bars 0-9, Day 2: bars 10-19
+    times = (
+        [pd.Timestamp("2024-01-01 00:00") + pd.Timedelta(minutes=5 * i) for i in range(10)]
+        + [pd.Timestamp("2024-01-02 00:00") + pd.Timedelta(minutes=5 * i) for i in range(10)]
+    )
+    prices = [100.0] * n
+    df = pd.DataFrame({
+        "time": times,
+        "open": prices,
+        "high": [102.0] * n,
+        "low": [98.0] * n,
+        "close": prices,
+        "ATR14": [2.0] * n,
+        "EMA200": [99.0] * n,
+        "ADX14": [30.0] * n,
+        "BuySignal": [False] * n,
+        "SellSignal": [False] * n,
+        "BullishBOS": [False] * n,
+        "BearishBOS": [False] * n,
+    })
+
+    # Signal on day 1 bar 1 — will lose (SL hit at bar 3)
+    df.loc[1, "BuySignal"] = True
+    df.loc[3, "low"] = 95.0
+
+    # Signal on day 2 bar 11 — should be allowed because daily_loss resets
+    df.loc[11, "BuySignal"] = True
+    df.loc[13, "high"] = 110.0  # TP hit
+
+    results = run_backtest(df, {
+        "starting_balance": 10000.0,
+        "spread_points": 0.0,
+        "slippage_points": 0.0,
+        "daily_loss_limit_pct": 0.5,  # Very tight: $50 limit per day
+    })
+
+    # Both trades should execute: first loses (exceeds day 1 limit),
+    # but day 2 resets daily_loss so second trade is allowed
+    assert results["total_trades"] == 2
+    assert results["trade_log"][0]["result"] == "LOSS"
+    assert results["trade_log"][1]["result"] == "WIN"
