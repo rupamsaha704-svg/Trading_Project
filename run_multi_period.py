@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from src.validation_runner import run_full_validation, export_validation_report, compute_stability
 from src.data_validation import validate_strict, get_quality_summary
+from src.data_prep import ensure_data_ready
 
 
 def slice_by_months(csv_path: str, months: int) -> str:
@@ -38,25 +39,41 @@ def run_multi_period(
     csv_path: str = "XAUUSD_M5_12M.csv",
     output_dir: str = "reports",
 ) -> Dict[str, Any]:
-    """Run validation on 12m, 8m, 6m slices and produce comparison report."""
+    """Run validation on available-360-day, 8m, 6m slices and produce comparison report."""
 
-    # Validate full CSV first
-    full_path = str(ROOT / csv_path) if not Path(csv_path).is_absolute() else csv_path
-    full_df = pd.read_csv(full_path)
+    # Auto-prepare data from ZIP if CSV is missing
+    full_path = Path(csv_path) if Path(csv_path).is_absolute() else ROOT / csv_path
+    if not full_path.exists():
+        ensure_data_ready(project_root=ROOT)
+        full_path = ROOT / "XAUUSD_M5_12M.csv"
+
+    full_path_str = str(full_path)
+    full_df = pd.read_csv(full_path_str)
     quality_report = validate_strict(full_df, csv_path)
     quality_summary = get_quality_summary(quality_report)
 
-    periods = [12, 8, 6]
+    # Determine actual date span
+    full_df["time"] = pd.to_datetime(full_df["time"])
+    span_days = (full_df["time"].max() - full_df["time"].min()).days
+
+    periods = {"available": None, "8m": 8, "6m": 6}
     period_results = {}
 
-    for months in periods:
-        slice_path = slice_by_months(full_path, months)
-        slice_df = pd.read_csv(slice_path)
-        slice_df["time"] = pd.to_datetime(slice_df["time"])
+    for label, months in periods.items():
+        if months is None:
+            # Full available period (not claiming 12 calendar months)
+            slice_path = full_path_str
+            slice_df = full_df
+        else:
+            slice_path = slice_by_months(full_path_str, months)
+            slice_df = pd.read_csv(slice_path)
+            slice_df["time"] = pd.to_datetime(slice_df["time"])
 
         report = run_full_validation(slice_path, config_path=str(ROOT / "strategy_config.json"))
-        period_results[f"{months}m"] = {
-            "months": months,
+
+        period_key = f"{span_days}d" if label == "available" else label
+        period_results[period_key] = {
+            "label": f"Available {span_days}-day period" if label == "available" else f"Last {months} months",
             "candles": len(slice_df),
             "start": str(slice_df["time"].min()),
             "end": str(slice_df["time"].max()),
@@ -69,7 +86,8 @@ def run_multi_period(
         }
 
         # Cleanup temp file
-        Path(slice_path).unlink(missing_ok=True)
+        if months is not None:
+            Path(slice_path).unlink(missing_ok=True)
 
     # Build comparison
     comparison = {
@@ -92,6 +110,7 @@ def _build_comparison_table(period_results: Dict[str, Any]) -> List[Dict[str, An
         os_stability = data["overall_stability"]
         rows.append({
             "period": key,
+            "label": data.get("label", key),
             "candles": data["candles"],
             "start": data["start"],
             "end": data["end"],
@@ -149,10 +168,10 @@ if __name__ == "__main__":
           f"{report['data_quality']['warning_count']}W, {report['data_quality']['error_count']}E")
 
     print("\n" + "-" * 60)
-    print(f"{'Period':<8} {'Candles':<8} {'Trades':<7} {'Net':<10} {'WR%':<6} {'PF':<6} {'Exp':<8} {'MDD%':<8} {'Stab%':<6}")
+    print(f"{'Period':<12} {'Candles':<8} {'Trades':<7} {'Net':<10} {'WR%':<6} {'PF':<6} {'Exp':<8} {'MDD%':<8} {'Stab%':<6}")
     print("-" * 60)
     for row in report["comparison_table"]:
-        print(f"{row['period']:<8} {row['candles']:<8} {row['total_trades']:<7} "
+        print(f"{row['period']:<12} {row['candles']:<8} {row['total_trades']:<7} "
               f"{row['net_result']:<10.2f} {row['win_rate']:<6.1f} {row['profit_factor']:<6.2f} "
               f"{row['expectancy']:<8.2f} {row['max_drawdown_pct']:<8.2f} {row['stability_profitable_pct']:<6.1f}")
     print("-" * 60)
