@@ -229,11 +229,29 @@ def run_full_validation(
 ) -> Dict[str, Any]:
     """Run all validation modes and produce a combined report.
 
+    Args:
+        csv_path: Path to CSV data file.
+        config_path: Path to config JSON. If None, loads ROOT/strategy_config.json.
+        output_dir: Directory for report output.
+
     Returns:
         Dict with results from all modes + stability summary.
+
+    Raises:
+        ValueError: If CSV data fails strict validation (ERROR-level findings).
     """
-    config = load_config(config_path)
+    # --- Load config (default to ROOT / strategy_config.json) ---
+    resolved_config_path = config_path if config_path is not None else str(ROOT / "strategy_config.json")
+    config = load_config(resolved_config_path)
     base_settings = get_backtest_settings(config)
+
+    # --- Strictly validate raw CSV before processing ---
+    from src.data_validation import validate_strict, get_quality_summary
+
+    csv_resolved = Path(csv_path) if Path(csv_path).is_absolute() else ROOT / csv_path
+    raw_df = pd.read_csv(str(csv_resolved))
+    quality_report = validate_strict(raw_df, str(csv_path))
+    data_quality_summary = get_quality_summary(quality_report)
 
     # --- Prepare full dataset ---
     df = prepare_dataframe(csv_path, config=config)
@@ -241,6 +259,7 @@ def run_full_validation(
     report: Dict[str, Any] = {
         "validation_date": date.today().isoformat(),
         "data_rows": len(df),
+        "data_quality": data_quality_summary,
         "config_used": config,
     }
 
