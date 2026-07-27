@@ -1,6 +1,16 @@
 # Generated backtest reports (daily CSV/JSON)
 reports/backtest_*.csv
 reports/backtest_*.json
+reports/validation_*.csv
+reports/validation_*.json
+reports/multi_period_*.csv
+reports/multi_period_*.json
+
+# Temp slices
+_temp_slice_*.csv
+
+# Large extracted data (keep ZIP in repo)
+XAUUSD_M5_12M.csv
 
 # Log files
 logs/
