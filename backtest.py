@@ -339,9 +339,40 @@ def prepare_dataframe(csv_path: str = "XAUUSD_M5.csv", config: Optional[Dict[str
 # MAIN EXECUTION
 # =============================================================================
 
+def parse_args(argv=None):
+    """Parse CLI arguments."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="STRATEGY V3 BACKTEST — Risk-Integrated Version",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to strategy config JSON (default: strategy_config.json in project root)",
+    )
+    parser.add_argument(
+        "--data",
+        default=None,
+        help="Path to CSV data file (overrides config data.csv_path)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for report output (default: reports/)",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    from src.data_validation import validate_strict, get_quality_summary
+
+    # --- Parse CLI ---
+    args = parse_args()
+
     # --- Load configuration ---
-    config = load_config(ROOT / "strategy_config.json")
+    config_path = args.config if args.config else ROOT / "strategy_config.json"
+    config = load_config(config_path)
     errors = validate_config(config)
     if errors:
         print("Configuration errors:")
@@ -356,9 +387,33 @@ if __name__ == "__main__":
     logger.info("STRATEGY V3 BACKTEST — Starting")
     logger.info("=" * 50)
 
-    # --- Load and prepare data ---
-    csv_path = config["data"]["csv_path"]
+    # --- Determine paths ---
+    csv_path = args.data if args.data else config["data"]["csv_path"]
+    output_dir = args.output_dir if args.output_dir else ROOT / "reports"
+
+    # --- Load raw CSV for validation (no datetime parsing yet) ---
     logger.info("Loading data from %s", csv_path)
+    raw_df = pd.read_csv(str(Path(csv_path) if Path(csv_path).is_absolute() else ROOT / csv_path))
+
+    # --- Strict data validation ---
+    logger.info("Validating data quality...")
+    try:
+        quality_report = validate_strict(raw_df, str(csv_path))
+    except ValueError as exc:
+        logger.error("Data validation FAILED: %s", exc)
+        sys.exit(1)
+
+    quality_summary = get_quality_summary(quality_report)
+    logger.info(
+        "Data quality: %d rows, %d warnings, %d errors",
+        quality_summary["row_count"],
+        quality_summary["warning_count"],
+        quality_summary["error_count"],
+    )
+    for finding in quality_summary["findings"]:
+        logger.warning("  [%s] %s: %s", finding["severity"], finding["code"], finding["message"])
+
+    # --- Prepare dataframe (indicators + signals) ---
     df = prepare_dataframe(csv_path, config=config)
     logger.info("Total candles: %d", len(df))
 
@@ -374,6 +429,9 @@ if __name__ == "__main__":
     )
 
     results = run_backtest(df, settings)
+
+    # --- Attach data quality to results for export ---
+    results["data_quality"] = quality_summary
 
     # --- Log results ---
     logger.info("-" * 50)
@@ -393,7 +451,7 @@ if __name__ == "__main__":
     logger.info("-" * 50)
 
     # --- Export daily report (CSV + JSON) ---
-    report_files = export_backtest_report(results, output_dir=ROOT / "reports")
+    report_files = export_backtest_report(results, output_dir=output_dir)
     logger.info("Reports exported:")
     logger.info("  CSV:  %s", report_files["csv"])
     logger.info("  JSON: %s", report_files["json"])

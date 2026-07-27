@@ -33,7 +33,7 @@ class DataQualityReport:
         }
 
 
-REQUIRED_COLUMNS = ["time", "open", "high", "low", "close"]
+REQUIRED_COLUMNS = ["time", "open", "high", "low", "close", "tick_volume"]
 
 
 def _severity_count(findings: List[ValidationFinding]) -> Dict[str, int]:
@@ -95,6 +95,18 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
         )
 
     if "time" in df.columns:
+        # Parse time with errors="coerce" to detect unparseable values
+        parsed_time = pd.to_datetime(df["time"], errors="coerce")
+        invalid_datetime_count = int(parsed_time.isna().sum() - df["time"].isna().sum())
+        if invalid_datetime_count > 0:
+            findings.append(
+                ValidationFinding(
+                    severity="ERROR",
+                    code="INVALID_DATETIME",
+                    message="Some time values could not be parsed as valid datetimes.",
+                    details={"invalid_count": invalid_datetime_count},
+                )
+            )
         if df["time"].isna().sum() > 0:
             findings.append(
                 ValidationFinding(
@@ -137,7 +149,7 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
                 )
 
     if "time" in df.columns:
-        duplicated_timestamps = int(df["time"].duplicated().sum())
+        duplicated_timestamps = int(parsed_time.duplicated().sum())
         if duplicated_timestamps > 0:
             findings.append(
                 ValidationFinding(
@@ -158,7 +170,9 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
             )
 
     if "time" in df.columns:
-        is_sorted = bool(df["time"].is_monotonic_increasing)
+        # Use parsed_time (safe from string issues) for order check
+        valid_times = parsed_time.dropna()
+        is_sorted = bool(valid_times.is_monotonic_increasing) if len(valid_times) > 0 else True
         if not is_sorted:
             findings.append(
                 ValidationFinding(
@@ -206,8 +220,33 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
                 )
             )
 
+    # --- Zero or negative prices ---
+    if all(col in df.columns for col in ["open", "high", "low", "close"]):
+        non_positive = (
+            (df["open"] <= 0) | (df["high"] <= 0) | (df["low"] <= 0) | (df["close"] <= 0)
+        )
+        non_positive_count = int(non_positive.sum())
+        if non_positive_count > 0:
+            findings.append(
+                ValidationFinding(
+                    severity="ERROR",
+                    code="NON_POSITIVE_PRICES",
+                    message="Some candles have zero or negative prices.",
+                    details={"non_positive_count": non_positive_count},
+                )
+            )
+        else:
+            findings.append(
+                ValidationFinding(
+                    severity="INFO",
+                    code="ALL_PRICES_POSITIVE",
+                    message="All OHLC prices are positive.",
+                    details={},
+                )
+            )
+
     if "time" in df.columns and len(df) > 1:
-        diffs = pd.Series(df["time"].diff().dropna())
+        diffs = pd.Series(parsed_time.diff().dropna())
         if diffs.empty:
             findings.append(
                 ValidationFinding(
@@ -240,27 +279,29 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
                 )
 
     if "time" in df.columns and len(df) > 1:
-        expected_index = pd.date_range(start=df["time"].min(), end=df["time"].max(), freq="5min")
-        actual_index = pd.DatetimeIndex(df["time"])
-        missing_candles = len(expected_index.difference(actual_index))
-        if missing_candles > 0:
-            findings.append(
-                ValidationFinding(
-                    severity="WARNING",
-                    code="MISSING_CANDLES",
-                    message="The dataset appears to contain missing expected candles.",
-                    details={"missing_candle_count": missing_candles},
+        valid_parsed = parsed_time.dropna()
+        if len(valid_parsed) > 1:
+            expected_index = pd.date_range(start=valid_parsed.min(), end=valid_parsed.max(), freq="5min")
+            actual_index = pd.DatetimeIndex(valid_parsed)
+            missing_candles = len(expected_index.difference(actual_index))
+            if missing_candles > 0:
+                findings.append(
+                    ValidationFinding(
+                        severity="WARNING",
+                        code="MISSING_CANDLES",
+                        message="The dataset appears to contain missing expected candles.",
+                        details={"missing_candle_count": missing_candles},
+                    )
                 )
-            )
-        else:
-            findings.append(
-                ValidationFinding(
-                    severity="INFO",
-                    code="NO_MISSING_CANDLES",
-                    message="No missing candles were detected for the observed time range.",
-                    details={},
+            else:
+                findings.append(
+                    ValidationFinding(
+                        severity="INFO",
+                        code="NO_MISSING_CANDLES",
+                        message="No missing candles were detected for the observed time range.",
+                        details={},
+                    )
                 )
-            )
 
     return DataQualityReport(
         file_path=file_path,
@@ -297,3 +338,34 @@ def save_report(report: DataQualityReport, output_path: str | Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(format_report(report), encoding="utf-8")
     return output
+
+
+
+def validate_strict(df: pd.DataFrame, file_path: str) -> DataQualityReport:
+    """Validate dataset and raise ValueError if any ERROR-level findings exist."""
+    report = validate_dataset(df, file_path)
+    if report.summary.get("ERROR", 0) > 0:
+        error_messages = [
+            f.message for f in report.findings if f.severity == "ERROR"
+        ]
+        raise ValueError(
+            f"Data validation failed for {file_path}: " + "; ".join(error_messages)
+        )
+    return report
+
+
+def get_quality_summary(report: DataQualityReport) -> Dict[str, Any]:
+    """Return a compact summary dict suitable for embedding in JSON reports."""
+    return {
+        "file_path": report.file_path,
+        "row_count": report.row_count,
+        "columns": report.column_names,
+        "info_count": report.summary.get("INFO", 0),
+        "warning_count": report.summary.get("WARNING", 0),
+        "error_count": report.summary.get("ERROR", 0),
+        "findings": [
+            {"severity": f.severity, "code": f.code, "message": f.message}
+            for f in report.findings
+            if f.severity in ("WARNING", "ERROR")
+        ],
+    }
