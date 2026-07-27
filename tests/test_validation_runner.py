@@ -18,6 +18,7 @@ from src.validation_runner import (
     stress_test_execution,
     compute_stability,
     export_validation_report,
+    run_full_validation,
     _extract_metrics,
 )
 from backtest import run_backtest
@@ -255,3 +256,70 @@ class TestExportValidationReport:
         assert files["json"].exists()
         assert files["csv"].exists()
         assert "validation_2024-01-01" in files["json"].name
+
+
+
+# =============================================================================
+# PR #6 FIXES: default config, strict validation, quality in report
+# =============================================================================
+
+
+class TestDefaultConfigLoaded:
+
+    def test_run_full_validation_uses_default_config(self):
+        """When config_path is None, strategy_config.json from ROOT is loaded."""
+        report = run_full_validation("XAUUSD_M5.csv", config_path=None)
+        # Should succeed and produce full_dataset results
+        assert "full_dataset" in report
+        assert report["full_dataset"]["total_trades"] > 0
+        # Config should match strategy_config.json defaults
+        assert report["config_used"]["risk"]["risk_percent"] == 1.0
+
+
+class TestInvalidCSVRejected:
+
+    def test_invalid_csv_raises_value_error(self, tmp_path):
+        """run_full_validation raises ValueError on CSV with invalid data."""
+        # CSV missing required columns
+        bad_csv = tmp_path / "bad.csv"
+        bad_csv.write_text("col_a,col_b\n1,2\n")
+
+        with pytest.raises(ValueError, match="Data validation failed"):
+            run_full_validation(str(bad_csv), config_path=None)
+
+    def test_csv_with_negative_prices_raises(self, tmp_path):
+        """CSV with negative prices should fail strict validation."""
+        bad_csv = tmp_path / "neg.csv"
+        bad_csv.write_text(
+            "time,open,high,low,close,tick_volume\n"
+            "2024-01-01 00:00,-10,11,9,10,100\n"
+            "2024-01-01 00:05,11,12,10,11,200\n"
+        )
+        with pytest.raises(ValueError, match="Data validation failed"):
+            run_full_validation(str(bad_csv), config_path=None)
+
+
+class TestQualitySummaryInReport:
+
+    def test_data_quality_present_in_validation_report(self):
+        """run_full_validation should include data_quality in the report dict."""
+        report = run_full_validation("XAUUSD_M5.csv", config_path=None)
+        assert "data_quality" in report
+        assert "row_count" in report["data_quality"]
+        assert "warning_count" in report["data_quality"]
+        assert "error_count" in report["data_quality"]
+        assert report["data_quality"]["error_count"] == 0
+
+    def test_data_quality_exported_in_json(self, tmp_path):
+        """Exported JSON should contain data_quality key."""
+        import json as _json
+        from datetime import date as d
+
+        report = run_full_validation("XAUUSD_M5.csv", config_path=None)
+        files = export_validation_report(report, output_dir=tmp_path, report_date=d(2024, 6, 1))
+
+        with open(files["json"]) as f:
+            data = _json.load(f)
+
+        assert "data_quality" in data
+        assert data["data_quality"]["row_count"] == 1000
