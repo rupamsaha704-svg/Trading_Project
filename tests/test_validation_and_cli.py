@@ -34,6 +34,7 @@ class TestValidateStrict:
             "high": [101.0, 102.0, 103.0, 104.0, 105.0],
             "low": [99.0, 100.0, 101.0, 102.0, 103.0],
             "close": [100.5, 101.5, 102.5, 103.5, 104.5],
+            "tick_volume": [100, 200, 300, 400, 500],
         })
 
     def test_valid_data_passes_strict(self):
@@ -172,6 +173,7 @@ class TestGetQualitySummary:
             "high": [11.0, 12.0, 13.0],
             "low": [9.0, 10.0, 11.0],
             "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
         })
         report = validate_dataset(df, "test.csv")
         summary = get_quality_summary(report)
@@ -192,6 +194,7 @@ class TestGetQualitySummary:
             "high": [11.0, 12.0, 13.0],
             "low": [9.0, 10.0, 11.0],
             "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
         })
         report = validate_dataset(df, "test.csv")
         summary = get_quality_summary(report)
@@ -279,3 +282,111 @@ class TestDataQualityInReport:
         assert "data_quality" in data
         assert data["data_quality"]["row_count"] == 100
         assert data["data_quality"]["warning_count"] == 1
+
+
+
+# =============================================================================
+# PR #4 FIX: volume required, invalid datetime, clean CLI exit
+# =============================================================================
+
+
+class TestVolumeRequired:
+
+    def test_missing_volume_column_raises(self):
+        """tick_volume is now required; missing it should raise in strict mode."""
+        df = pd.DataFrame({
+            "time": pd.date_range("2024-01-01", periods=3, freq="5min"),
+            "open": [10.0, 11.0, 12.0],
+            "high": [11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0],
+            "close": [10.5, 11.5, 12.5],
+            # no tick_volume
+        })
+        with pytest.raises(ValueError, match="Data validation failed"):
+            validate_strict(df, "test.csv")
+
+    def test_volume_present_passes(self):
+        """When tick_volume is present, no MISSING_COLUMNS error."""
+        df = pd.DataFrame({
+            "time": pd.date_range("2024-01-01", periods=3, freq="5min"),
+            "open": [10.0, 11.0, 12.0],
+            "high": [11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0],
+            "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
+        })
+        report = validate_dataset(df, "test.csv")
+        codes = [f.code for f in report.findings if f.severity == "ERROR"]
+        assert "MISSING_COLUMNS" not in codes
+
+
+class TestInvalidDatetime:
+
+    def test_invalid_datetime_text_detected(self):
+        """Unparseable datetime strings produce INVALID_DATETIME error."""
+        df = pd.DataFrame({
+            "time": ["2024-01-01 00:00", "not-a-date", "2024-01-01 00:10"],
+            "open": [10.0, 11.0, 12.0],
+            "high": [11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0],
+            "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
+        })
+        report = validate_dataset(df, "test.csv")
+        codes = [f.code for f in report.findings]
+        assert "INVALID_DATETIME" in codes
+        # Check count
+        finding = next(f for f in report.findings if f.code == "INVALID_DATETIME")
+        assert finding.details["invalid_count"] == 1
+
+    def test_invalid_datetime_raises_in_strict(self):
+        """validate_strict raises on unparseable datetime."""
+        df = pd.DataFrame({
+            "time": ["2024-01-01 00:00", "garbage", "2024-01-01 00:10"],
+            "open": [10.0, 11.0, 12.0],
+            "high": [11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0],
+            "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
+        })
+        with pytest.raises(ValueError, match="Data validation failed"):
+            validate_strict(df, "test.csv")
+
+    def test_valid_datetimes_no_error(self):
+        """Valid datetime strings produce no INVALID_DATETIME finding."""
+        df = pd.DataFrame({
+            "time": ["2024-01-01 00:00", "2024-01-01 00:05", "2024-01-01 00:10"],
+            "open": [10.0, 11.0, 12.0],
+            "high": [11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0],
+            "close": [10.5, 11.5, 12.5],
+            "tick_volume": [100, 200, 300],
+        })
+        report = validate_dataset(df, "test.csv")
+        codes = [f.code for f in report.findings]
+        assert "INVALID_DATETIME" not in codes
+
+
+class TestCLIExitOnInvalidDatetime:
+
+    def test_backtest_exits_cleanly_on_invalid_data(self, tmp_path):
+        """Backtest should exit with code 1 (not crash) when CSV has invalid datetimes."""
+        import subprocess
+
+        # Write a CSV with invalid datetime
+        csv_content = "time,open,high,low,close,tick_volume\nnot-a-date,10,11,9,10.5,100\n"
+        csv_file = tmp_path / "bad_data.csv"
+        csv_file.write_text(csv_content)
+
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "backtest.py"), "--data", str(csv_file)],
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+        )
+
+        # Should exit with code 1, not an unhandled exception
+        assert result.returncode == 1
+        # Should mention validation failure in stderr or stdout
+        combined = result.stdout + result.stderr
+        assert "validation" in combined.lower() or "FAILED" in combined

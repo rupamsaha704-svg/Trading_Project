@@ -391,10 +391,9 @@ if __name__ == "__main__":
     csv_path = args.data if args.data else config["data"]["csv_path"]
     output_dir = args.output_dir if args.output_dir else ROOT / "reports"
 
-    # --- Load data ---
+    # --- Load raw CSV for validation (no datetime parsing yet) ---
     logger.info("Loading data from %s", csv_path)
-    from src.utils import load_data as _load
-    raw_df = _load(csv_path)
+    raw_df = pd.read_csv(str(Path(csv_path) if Path(csv_path).is_absolute() else ROOT / csv_path))
 
     # --- Strict data validation ---
     logger.info("Validating data quality...")
