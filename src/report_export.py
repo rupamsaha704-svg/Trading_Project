@@ -73,6 +73,11 @@ def export_backtest_report(
         "settings": results["settings"],
         "trade_count_by_side": _count_sides(trade_log),
     }
+
+    # Include data quality summary if available
+    if "data_quality" in results:
+        metrics["data_quality"] = results["data_quality"]
+
     json_file.write_text(
         json.dumps(metrics, indent=2, default=str),
         encoding="utf-8",

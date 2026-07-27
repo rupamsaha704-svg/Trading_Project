@@ -206,6 +206,31 @@ def validate_dataset(df: pd.DataFrame, file_path: str) -> DataQualityReport:
                 )
             )
 
+    # --- Zero or negative prices ---
+    if all(col in df.columns for col in ["open", "high", "low", "close"]):
+        non_positive = (
+            (df["open"] <= 0) | (df["high"] <= 0) | (df["low"] <= 0) | (df["close"] <= 0)
+        )
+        non_positive_count = int(non_positive.sum())
+        if non_positive_count > 0:
+            findings.append(
+                ValidationFinding(
+                    severity="ERROR",
+                    code="NON_POSITIVE_PRICES",
+                    message="Some candles have zero or negative prices.",
+                    details={"non_positive_count": non_positive_count},
+                )
+            )
+        else:
+            findings.append(
+                ValidationFinding(
+                    severity="INFO",
+                    code="ALL_PRICES_POSITIVE",
+                    message="All OHLC prices are positive.",
+                    details={},
+                )
+            )
+
     if "time" in df.columns and len(df) > 1:
         diffs = pd.Series(df["time"].diff().dropna())
         if diffs.empty:
@@ -297,3 +322,34 @@ def save_report(report: DataQualityReport, output_path: str | Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(format_report(report), encoding="utf-8")
     return output
+
+
+
+def validate_strict(df: pd.DataFrame, file_path: str) -> DataQualityReport:
+    """Validate dataset and raise ValueError if any ERROR-level findings exist."""
+    report = validate_dataset(df, file_path)
+    if report.summary.get("ERROR", 0) > 0:
+        error_messages = [
+            f.message for f in report.findings if f.severity == "ERROR"
+        ]
+        raise ValueError(
+            f"Data validation failed for {file_path}: " + "; ".join(error_messages)
+        )
+    return report
+
+
+def get_quality_summary(report: DataQualityReport) -> Dict[str, Any]:
+    """Return a compact summary dict suitable for embedding in JSON reports."""
+    return {
+        "file_path": report.file_path,
+        "row_count": report.row_count,
+        "columns": report.column_names,
+        "info_count": report.summary.get("INFO", 0),
+        "warning_count": report.summary.get("WARNING", 0),
+        "error_count": report.summary.get("ERROR", 0),
+        "findings": [
+            {"severity": f.severity, "code": f.code, "message": f.message}
+            for f in report.findings
+            if f.severity in ("WARNING", "ERROR")
+        ],
+    }
