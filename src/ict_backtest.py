@@ -84,6 +84,8 @@ def run_ict_challenge(
     risk_reward: float = 3.0,
     trailing_activation_rr: float = 1.5,
     max_bars_in_trade: int = 60,  # 5 hours max hold on M5
+    require_killzone: bool = True,
+    adx_threshold: float = 20.0,
 ) -> ChallengeResult:
     """Simulate a GFT challenge phase using ICT signals.
 
@@ -125,7 +127,7 @@ def run_ict_challenge(
     daily_loss_today = 0.0
 
     # Generate signals
-    signals = generate_ict_signals(df, adx_threshold=20.0, require_killzone=True)
+    signals = generate_ict_signals(df, adx_threshold=adx_threshold, require_killzone=require_killzone)
 
     # Index signals by bar
     signal_map: Dict[int, ICTSignal] = {s.bar_index: s for s in signals}
