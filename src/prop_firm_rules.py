@@ -18,7 +18,7 @@ class GFTRules:
     """GFT 2-Step Standard account rules."""
 
     # Account
-    account_balance: float = 25_000.0
+    account_balance: float = 5_000.0
     leverage_commodities: float = 20.0       # 1:20 for Gold (commodities) in evaluation
     leverage_funded: float = 10.0            # 1:10 funded phase
 
@@ -27,8 +27,8 @@ class GFTRules:
     max_overall_drawdown_pct: float = 10.0   # 10% static — equity never below 90% of start
 
     # Profit targets
-    step1_profit_target_pct: float = 10.0    # $2,500 on $25K
-    step2_profit_target_pct: float = 5.0     # $1,250 on $25K
+    step1_profit_target_pct: float = 10.0    # $500 on $5K
+    step2_profit_target_pct: float = 5.0     # $250 on $5K
     funded_daily_profit_cap: float = 3_000.0 # $3,000 daily cap (funded only)
 
     # Trading rules
@@ -41,9 +41,9 @@ class GFTRules:
     no_hedging: bool = True                  # No hedging allowed
     no_martingale: bool = True               # No martingale allowed
 
-    # Targets
-    minimum_profit_target: float = 15_000.0  # $15K minimum
-    stretch_profit_target: float = 30_000.0  # $30K target
+    # Targets (Phase 1: pass $5K, then scale to $25K)
+    minimum_profit_target: float = 500.0     # Step 1: $500
+    stretch_profit_target: float = 30_000.0  # Ultimate goal on funded $25K
     max_margin_usage_pct: float = 80.0       # Keep within 80% margin
 
     def daily_drawdown_amount(self) -> float:
